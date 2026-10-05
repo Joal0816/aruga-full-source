@@ -1,0 +1,6 @@
+clip,frames,seconds,fps,max_persons,max_risk,falls,events,error
+ur_adl-01.mp4,350,4.9,71.0,1,UNUSUAL,0,0,
+ur_adl-02.mp4,380,5.5,69.0,1,NORMAL,0,0,
+ur_fall-01.mp4,360,5.1,70.9,1,EMERGENCY,1,2,
+ur_fall-02.mp4,310,4.4,71.0,1,EMERGENCY,1,2,
+ur_fall-03.mp4,415,6.0,69.0,1,EMERGENCY,1,2,

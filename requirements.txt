@@ -1,0 +1,16 @@
+opencv-python>=4.8.0
+mediapipe==0.10.14
+streamlit>=1.30.0
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0
+Pillow>=10.0.0
+customtkinter>=5.2.0
+onnxruntime-directml>=1.20.0
+# Hallway track (Ryzen/iGPU -> gaming CUDA scale-up):
+#  - Default: onnxruntime-directml (Windows; uses AMD/Intel iGPU via DirectML,
+#    auto-falls back to CPU). No torch needed anywhere; the .onnx model ships
+#    in assets/models/, so the app runs fully offline after setup.
+#  - NVIDIA gaming laptop: replace the line above with onnxruntime-gpu>=1.20.0
+#    and the backend auto-selects CUDA (no code changes).
+# Model weights: YOLOv8n-pose (Xenova export of Ultralytics, AGPL-3.0) —
+# fine for internal eval; review licensing before any commercial deployment.
