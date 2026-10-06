@@ -19,7 +19,9 @@ class PoseEstimator:
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5
     ):
-        if mp is not None:
+        # Modern mediapipe wheels (0.10.30+/1.0, Python 3.13+) ship only the
+        # `tasks` API — without `solutions` fall back to the YOLO ONNX backend.
+        if mp is not None and hasattr(mp, "solutions"):
             self.mp_pose = mp.solutions.pose
             self.mp_drawing = mp.solutions.drawing_utils
             self.mp_drawing_styles = mp.solutions.drawing_styles

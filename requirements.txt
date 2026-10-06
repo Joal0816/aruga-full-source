@@ -1,11 +1,18 @@
 opencv-python>=4.8.0
-mediapipe==0.10.14
+# mediapipe's legacy mp.solutions.pose API only ships wheels up to Python 3.12;
+# on 3.13+ PoseEstimator auto-falls back to the bundled YOLO ONNX backend.
+mediapipe==0.10.14; python_version < "3.13"
 streamlit>=1.30.0
-numpy>=1.24.0,<2.0.0
+# numpy 1.x has no wheels past Python 3.12; the code runs fine on numpy 2.x.
+numpy>=1.24.0,<2.0.0; python_version < "3.13"
+numpy>=1.24.0; python_version >= "3.13"
 pandas>=2.0.0
 Pillow>=10.0.0
 customtkinter>=5.2.0
-onnxruntime-directml>=1.20.0
+# Windows: DirectML execution provider (AMD/Intel iGPU, CPU fallback).
+# Elsewhere: plain onnxruntime (CUDA is auto-selected by onnxruntime-gpu builds).
+onnxruntime-directml>=1.20.0; sys_platform == "win32"
+onnxruntime>=1.20.0; sys_platform != "win32"
 # Hallway track (Ryzen/iGPU -> gaming CUDA scale-up):
 #  - Default: onnxruntime-directml (Windows; uses AMD/Intel iGPU via DirectML,
 #    auto-falls back to CPU). No torch needed anywhere; the .onnx model ships

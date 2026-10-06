@@ -152,21 +152,28 @@ class FeatureExtractor:
         sternum_x = mid_shoulder_x
         sternum_y = mid_shoulder_y
 
-        d_left = 999.0
+        d_left, dy_left = 999.0, 999.0
         if lw is not None and lw.get("visibility", 1.0) >= 0.2:
             d_left = float(np.hypot(lw["x_norm"] - sternum_x, lw["y_norm"] - sternum_y))
+            dy_left = abs(float(lw["y_norm"]) - sternum_y)
 
-        d_right = 999.0
+        d_right, dy_right = 999.0, 999.0
         if rw is not None and rw.get("visibility", 1.0) >= 0.2:
             d_right = float(np.hypot(rw["x_norm"] - sternum_x, rw["y_norm"] - sternum_y))
+            dy_right = abs(float(rw["y_norm"]) - sternum_y)
 
         if d_left == 999.0 and d_right == 999.0:
-            wrist_dist = 1.0
+            wrist_dist, wrist_dy = 1.0, 1.0
+        elif d_left <= d_right:
+            wrist_dist, wrist_dy = d_left, dy_left
         else:
-            wrist_dist = min(d_left, d_right)
+            wrist_dist, wrist_dy = d_right, dy_right
 
-        # Flag is_levine_gesture: clutching against sternum + antalgic trunk flexion
-        is_levine_gesture = bool((wrist_dist <= 0.16) and (20.0 <= spine_angle <= 48.0))
+        # Flag is_levine_gesture: clutching against sternum + antalgic trunk flexion.
+        # wrist_dy: a clutching wrist sits AT sternum height; a hand resting in
+        # the lap during a slow slouch hangs >=0.10 below it (false-positive guard).
+        is_levine_gesture = bool((wrist_dist <= 0.16) and (wrist_dy <= 0.05)
+                                 and (20.0 <= spine_angle <= 48.0))
         
         return {
             "timestamp": current_time,
