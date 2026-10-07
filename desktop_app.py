@@ -39,18 +39,7 @@ from core.frame_pump import FramePump, SourceLost
 from utils.visualizer import Visualizer
 from utils.logger import EventLogger
 from utils.synthetic_generator import generate_synthetic_fall_video
-
-try:
-    import winsound
-
-    def _beep():
-        try:
-            winsound.Beep(880, 300)
-        except Exception:
-            pass
-except Exception:  # non-Windows: silent
-    def _beep():
-        pass
+from utils.beep import beep as _beep, AlarmAck
 
 
 ctk.set_appearance_mode("dark")
@@ -89,6 +78,7 @@ class ArugaDesktopApp(ctk.CTk):
         self.profile_name = self.profiles.active
         self._worker: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._ack = AlarmAck()
         self._packets: queue.Queue = queue.Queue(maxsize=2)
         self._running = False
         self._last_event_count = 0
@@ -128,6 +118,8 @@ class ArugaDesktopApp(ctk.CTk):
                      text_color="gray").pack(side="left", padx=8)
         self.status_label = ctk.CTkLabel(header, text="Idle", text_color="gray")
         self.status_label.pack(side="right", padx=16)
+        ctk.CTkButton(header, text="🔕 Acknowledge (10 min)", width=170,
+                      command=self._do_ack).pack(side="right", padx=(0, 4))
 
         # --- draggable splitters (nested PanedWindows) ---
         # Outer vertical split: top area (sidebar|video|telemetry) / bottom area (log+snapshots).
@@ -610,6 +602,12 @@ class ArugaDesktopApp(ctk.CTk):
             return None
         return self._video_path, "file", os.path.basename(self._video_path)
 
+    def _do_ack(self):
+        """Silence repeating alarm beeps for 10 min; visuals/logs keep running.
+        Re-arms automatically when the alarm clears (next incident sounds)."""
+        self._ack.ack(time.time())
+        self.status_label.configure(text="Alarm acknowledged — beeps silenced for 10 min (visual alert active)")
+
     def start(self):
         if self._running:
             return
@@ -815,7 +813,9 @@ class ArugaDesktopApp(ctk.CTk):
                            "is_inact": ins.get("is_inactive_alert", False),
                            "persons": [], "backend": "mediapipe"}
 
-                if self.params["audio"] and pkt["risk"] in ("CONCERNING", "EMERGENCY"):
+                alarm_active = pkt["risk"] in ("CONCERNING", "EMERGENCY")
+                self._ack.rearm_if_cleared(alarm_active, now)
+                if self.params["audio"] and alarm_active and not self._ack.muted(now):
                     if now - last_beep > 1.5:
                         _beep()
                         last_beep = now

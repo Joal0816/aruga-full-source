@@ -41,18 +41,7 @@ from core.camera_sources import (
 from core.frame_pump import FramePump, SourceLost
 from utils.hallway_overlay import draw_hallway_hud
 from utils.logger import EventLogger
-
-try:
-    import winsound
-
-    def _beep():
-        try:
-            winsound.Beep(880, 300)
-        except Exception:
-            pass
-except Exception:
-    def _beep():
-        pass
+from utils.beep import beep as _beep, AlarmAck
 
 
 ctk.set_appearance_mode("dark")
@@ -215,6 +204,7 @@ class HallwayApp(ctk.CTk):
         self._load_zones_for_profile()
         self._worker = None
         self._stop_event = threading.Event()
+        self._ack = AlarmAck()
         self._packets: queue.Queue = queue.Queue(maxsize=2)
         self._running = False
         self._last_event_count = 0
@@ -264,6 +254,10 @@ class HallwayApp(ctk.CTk):
                      text_color="gray").pack(side="left", padx=8)
         self.status_label = ctk.CTkLabel(header, text="Idle — press Start", text_color="gray")
         self.status_label.pack(side="right", padx=16)
+        self.ack_btn = ctk.CTkButton(
+            header, text="🔕 Acknowledge (10 min)", width=170,
+            command=lambda: self._do_ack())
+        self.ack_btn.pack(side="right", padx=(0, 4))
 
         self.outer_pane = tk.PanedWindow(self, orient="vertical", background="#212121",
                                          sashwidth=8, sashrelief="flat", borderwidth=0)
@@ -771,6 +765,12 @@ class HallwayApp(ctk.CTk):
             return None
         return self._video_path, "file", os.path.basename(self._video_path)
 
+    def _do_ack(self):
+        """Silence repeating alarm beeps for 10 min; visuals/logs keep running.
+        Re-arms automatically when the alarm clears (next incident sounds)."""
+        self._ack.ack(time.time())
+        self.status_label.configure(text="Alarm acknowledged — beeps silenced for 10 min (visual alert active)")
+
     def start(self):
         if self._running:
             return
@@ -950,7 +950,9 @@ class HallwayApp(ctk.CTk):
                 else:
                     pkt = {"risk": "NORMAL", "angle": 0.0, "vy": 0.0, "inact": 0.0, "is_inact": False}
 
-                if self.params["audio"] and pkt["risk"] in ("SLUMP", "CONCERNING", "EMERGENCY"):
+                alarm_active = pkt["risk"] in ("SLUMP", "CONCERNING", "EMERGENCY")
+                self._ack.rearm_if_cleared(alarm_active, now)
+                if self.params["audio"] and alarm_active and not self._ack.muted(now):
                     if now - last_beep > 2.0:
                         _beep()
                         last_beep = now

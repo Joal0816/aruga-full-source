@@ -24,6 +24,7 @@ from core.camera_sources import (
 from core.frame_pump import FramePump, SourceLost
 from utils.visualizer import Visualizer
 from utils.logger import EventLogger
+from utils.beep import AlarmAck
 from utils.synthetic_generator import generate_synthetic_fall_video
 
 # --- PAGE CONFIGURATION ---
@@ -303,6 +304,8 @@ if "is_running" not in st.session_state:
     st.session_state.is_running = False
 if "event_logger" not in st.session_state:
     st.session_state.event_logger = EventLogger()
+if "ack" not in st.session_state:
+    st.session_state.ack = AlarmAck()
 if "fall_detector" not in st.session_state:
     st.session_state.fall_detector = FallDetector(
         angle_threshold=angle_thresh,
@@ -345,7 +348,7 @@ col_video, col_telemetry = st.columns([3, 2])
 with col_video:
     st.subheader("📺 Video Stream & Real-time HUD")
     video_placeholder = st.empty()
-    run_button_col1, run_button_col2 = st.columns([1, 1])
+    run_button_col1, run_button_col2, run_button_col3 = st.columns([1, 1, 1])
     with run_button_col1:
         if st.button("▶️ Start Monitoring", use_container_width=True, type="primary"):
             st.session_state.is_running = True
@@ -357,6 +360,11 @@ with col_video:
             st.session_state.feature_extractor.reset()
             st.session_state.multi_manager.reset()
             st.rerun()
+    with run_button_col3:
+        if st.button("🔕 Acknowledge (10 min)", use_container_width=True,
+                     help="Silences the repeating alarm sound for 10 minutes. "
+                          "Visual alerts and logs keep running; re-arms on the next incident."):
+            st.session_state.ack.ack(time.time())
 
 with col_telemetry:
     st.subheader("📊 Live Telemetry & Metrics")
@@ -644,7 +652,10 @@ if st.session_state.is_running and video_source is not None:
             </div>
             """, unsafe_allow_html=True)
 
-            if enable_audio and (curr_risk in ("CONCERNING", "EMERGENCY") or worst_behavior == "LEVINE_SIGN_DISTRESS"):
+            alarm_active = (curr_risk in ("CONCERNING", "EMERGENCY")
+                            or worst_behavior == "LEVINE_SIGN_DISTRESS")
+            st.session_state.ack.rearm_if_cleared(alarm_active, time.time())
+            if enable_audio and alarm_active and not st.session_state.ack.muted(time.time()):
                 audio_trigger_placeholder.markdown(AUDIO_ALARM_HTML, unsafe_allow_html=True)
             else:
                 audio_trigger_placeholder.empty()
@@ -827,7 +838,10 @@ if st.session_state.is_running and video_source is not None:
             """, unsafe_allow_html=True)
 
             # Audio alert on CONCERNING, EMERGENCY, or LEVINE_SIGN_DISTRESS
-            if enable_audio and (curr_risk in ("CONCERNING", "EMERGENCY") or behavior == "LEVINE_SIGN_DISTRESS"):
+            alarm_active = (curr_risk in ("CONCERNING", "EMERGENCY")
+                            or behavior == "LEVINE_SIGN_DISTRESS")
+            st.session_state.ack.rearm_if_cleared(alarm_active, time.time())
+            if enable_audio and alarm_active and not st.session_state.ack.muted(time.time()):
                 audio_trigger_placeholder.markdown(AUDIO_ALARM_HTML, unsafe_allow_html=True)
             else:
                 audio_trigger_placeholder.empty()
