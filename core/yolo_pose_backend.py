@@ -95,10 +95,19 @@ class YoloPoseBackend:
         if len(candidates) == 1:
             self.session = ort.InferenceSession(model_path, sess_options=so, providers=candidates)
             self.backend_name = self._short(candidates[0])
+            chosen_prov = candidates[0]
         else:
-            self.session, self.backend_name = self._benchmark(so, candidates, iters=benchmark_iters)
+            self.session, self.backend_name, chosen_prov = self._benchmark(so, candidates, iters=benchmark_iters)
+        # intra_op thread count is CPU-side: on HT CPUs 4 threads can be
+        # SLOWER than 2 (measured 643ms vs 504ms on i5-3230M). Benchmark
+        # a few counts — same philosophy as the EP benchmark above.
+        if chosen_prov == "CPUExecutionProvider":
+            self.session, self.intra_op_threads = self._tune_threads(chosen_prov)
+        else:
+            self.intra_op_threads = max(1, os.cpu_count() or 4)
         print(f"[YoloPose] backend: {self.backend_name} "
-              f"(tried {[self._short(c) for c in candidates]})")
+              f"(tried {[self._short(c) for c in candidates]}) "
+              f"threads={self.intra_op_threads}")
 
     @staticmethod
     def _short(provider: str) -> str:
@@ -107,7 +116,7 @@ class YoloPoseBackend:
 
     def _benchmark(self, sess_options, candidates: List[str], iters: int = 6):
         dummy = np.zeros((1, 3, self.input_size, self.input_size), dtype=np.float32)
-        best, best_ms, best_name = None, float("inf"), "CPU"
+        best, best_ms, best_name, best_prov = None, float("inf"), "CPU", "CPUExecutionProvider"
         for prov in candidates:
             try:
                 sess = ort.InferenceSession(self.model_path, sess_options=sess_options, providers=[prov])
@@ -118,13 +127,47 @@ class YoloPoseBackend:
                 ms = (time.time() - t0) / iters * 1000.0
                 print(f"[YoloPose]   {self._short(prov)}: {ms:.1f} ms/infer")
                 if ms < best_ms:
-                    best, best_ms, best_name = sess, ms, self._short(prov)
+                    best, best_ms, best_name, best_prov = sess, ms, self._short(prov), prov
             except Exception as e:
                 print(f"[YoloPose]   {self._short(prov)} failed ({e}), skipped")
         if best is None:
             best = ort.InferenceSession(self.model_path, sess_options=sess_options,
                                         providers=["CPUExecutionProvider"])
-        return best, best_name
+        return best, best_name, best_prov
+
+    def _tune_threads(self, provider: str, iters: int = 3):
+        """Benchmark intra_op thread counts (fastest wins). Cheap one-time
+        startup cost; pays for itself within seconds of live processing."""
+        cpu = max(1, os.cpu_count() or 4)
+        counts = sorted({t for t in (1, 2, 4, cpu) if 1 <= t <= cpu})
+        if len(counts) < 2:
+            self.session = self._session_with(provider, cpu)
+            return self.session, cpu
+        dummy = np.zeros((1, 3, self.input_size, self.input_size), dtype=np.float32)
+        best, best_ms, best_t = None, float("inf"), cpu
+        for t in counts:
+            try:
+                sess = self._session_with(provider, t)
+                sess.run(None, {"images": dummy})  # warmup
+                t0 = time.time()
+                for _ in range(iters):
+                    sess.run(None, {"images": dummy})
+                ms = (time.time() - t0) / iters * 1000.0
+                print(f"[YoloPose]   threads={t}: {ms:.1f} ms/infer")
+                if ms < best_ms:
+                    best, best_ms, best_t = sess, ms, t
+            except Exception as e:
+                print(f"[YoloPose]   threads={t} failed ({e}), skipped")
+        if best is None:
+            best = self._session_with(provider, cpu)
+            best_t = cpu
+        return best, best_t
+
+    def _session_with(self, provider: str, threads: int):
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = threads
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        return ort.InferenceSession(self.model_path, sess_options=so, providers=[provider])
 
     def set_max_persons(self, n: int):
         self.max_persons = max(1, min(12, int(n)))

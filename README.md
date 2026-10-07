@@ -148,6 +148,21 @@ Scale-up path (no code changes): on an NVIDIA machine replace
 `onnxruntime-directml` with `onnxruntime-gpu` in `requirements.txt`, optionally
 drop in a larger `*-pose.onnx` as `assets/models/yolov8n-pose.onnx`.
 
+### Performance notes (Linux)
+
+- Startup benchmarks ONNX intra-op thread counts and picks the fastest
+  (hyperthreaded CPUs often run faster at 2 threads than at 4 — the
+  `[YoloPose] threads=N` lines show the trial results).
+- Single-person apps (`app.py`, `desktop_app.py`) run ~5× faster with
+  MediaPipe than the YOLO-ONNX fallback: use a Python ≤3.12 venv where
+  `mediapipe==0.10.14` installs (`uv venv --python 3.12 .venv312 && uv pip
+  install --python .venv312/bin/python -r requirements.txt`). Python 3.13+
+  falls back to YOLO-ONNX automatically.
+- `python tools/bench_pipeline.py` prints per-stage ms/fps on your hardware
+  (run on an idle CPU).
+- Live sources (RTSP/webcam) use a reader thread with drop-oldest buffering,
+  so slow inference adds no stream lag — analysis always sees the newest frame.
+
 > **Licensing note:** YOLO pose weights are AGPL-3.0 (Ultralytics export) and the
 > UR/Le2i eval datasets are non-commercial/research — fine for internal
 > evaluation; review licensing before any commercial deployment.

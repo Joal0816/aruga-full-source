@@ -124,11 +124,59 @@ class FramePump:
         raise SourceLost("Webcam stopped responding (30 empty reads).")
 
     def frames(self, alive: Callable[[], bool] = lambda: True) -> Iterator:
+        if self.kind in ("rtsp", "webcam"):
+            yield from self._frames_live(alive)
+            return
         while alive():
             frame = self.read()  # may raise SourceLost
             if frame is None:
                 continue
             yield frame
+
+    def _frames_live(self, alive: Callable[[], bool]) -> Iterator:
+        """Live sources: a reader thread keeps the socket/driver drained so a
+        slow consumer gets the NEWEST frame instead of accumulating a TCP /
+        driver backlog (25 fps stream + 3 fps inference = minutes of lag
+        within a minute). Drop-oldest queue, maxsize 2. Files keep the
+        sequential path (processing-paced, no latency to bound)."""
+        import queue as _queue
+        import threading as _threading
+        q: "_queue.Queue" = _queue.Queue(maxsize=2)
+        errors: list = []
+        stop = _threading.Event()
+
+        def _reader():
+            try:
+                while not stop.is_set():
+                    frame = self.read()  # may raise SourceLost
+                    if frame is None:
+                        continue
+                    while True:  # keep only the newest frame
+                        try:
+                            q.get_nowait()
+                        except _queue.Empty:
+                            break
+                    try:
+                        q.put_nowait(frame)
+                    except _queue.Full:
+                        pass
+            except Exception as e:  # SourceLost (or abort) surfaces here
+                errors.append(e)
+
+        t = _threading.Thread(target=_reader, daemon=True)
+        t.start()
+        try:
+            while alive():
+                try:
+                    yield q.get(timeout=0.5)
+                except _queue.Empty:
+                    if errors:
+                        raise errors[0]
+                    if not t.is_alive():
+                        raise SourceLost("Stream ended.")
+                    # transient gap: keep waiting (reader may be reconnecting)
+        finally:
+            stop.set()
 
     def release(self):
         try:
