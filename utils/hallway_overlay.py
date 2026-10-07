@@ -3,27 +3,22 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 
 from core.yolo_pose_backend import COCO_PAIRS
+from utils.risk_palette import bgr as risk_bgr, ASCII_TAG
 
-# BGR colors
-COLORS = {
-    "NORMAL": (113, 204, 46),
-    "RESTING": (250, 160, 60),    # soft blue
-    "UNUSUAL": (36, 191, 251),
-    "SLUMP": (60, 140, 251),      # orange
-    "CONCERNING": (60, 76, 231),
-    "EMERGENCY": (182, 89, 155),
-    "WEAK": (150, 150, 150),
-    "DARK_BG": (20, 24, 28),
-}
+# Risk colors come from the shared palette; local extras only.
+COLORS = {r: risk_bgr(r) for r in
+          ("NORMAL", "RESTING", "UNUSUAL", "SLUMP", "CONCERNING", "EMERGENCY")}
+COLORS.update({"WEAK": (150, 150, 150), "DARK_BG": (20, 24, 28)})
 RISK_ORDER = {"NORMAL": 0, "RESTING": 1, "UNUSUAL": 2, "SLUMP": 3, "CONCERNING": 4, "EMERGENCY": 5}
 
+# ASCII only — these badges are drawn with cv2.putText (no emoji support).
 BADGES = {
-    "NORMAL": "🟢 NORMAL: ROUTINE MOBILITY",
-    "RESTING": "🔵 RESTING IN SEATING AREA",
-    "UNUSUAL": "⚠️ UNUSUAL: UNSTABLE / SEVERE TILT",
-    "SLUMP": "🟠 SLUMP: CHECK ON PERSON",
-    "CONCERNING": "⚠️ CONCERNING: FALL DETECTED",
-    "EMERGENCY": "🚨 EMERGENCY: UNRESPONSIVE",
+    "NORMAL": "NORMAL: ROUTINE MOBILITY",
+    "RESTING": "RESTING IN SEATING AREA",
+    "UNUSUAL": ASCII_TAG["UNUSUAL"] + "UNUSUAL: UNSTABLE / SEVERE TILT",
+    "SLUMP": ASCII_TAG["SLUMP"] + "SLUMP: CHECK ON PERSON",
+    "CONCERNING": ASCII_TAG["CONCERNING"] + "CONCERNING: FALL DETECTED",
+    "EMERGENCY": ASCII_TAG["EMERGENCY"] + "EMERGENCY: UNRESPONSIVE",
 }
 
 

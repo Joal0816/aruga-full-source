@@ -2,11 +2,9 @@ import cv2
 import numpy as np
 from typing import Dict, Any, Tuple, Optional
 
-# Color constants (BGR)
-COLOR_NORMAL = (113, 204, 46)        # Vibrant Green
-COLOR_UNUSUAL = (36, 191, 251)       # Amber / Gold
-COLOR_CONCERNING = (60, 76, 231)     # Red / Coral
-COLOR_EMERGENCY = (182, 89, 155)     # Deep Magenta / Purple Alert
+from utils.risk_palette import bgr as risk_bgr, ASCII_TAG
+
+# Non-risk constants (risk colors come from utils.risk_palette)
 COLOR_NEUTRAL = (220, 220, 220)      # Soft White
 COLOR_DARK_BG = (20, 24, 28)         # Dark slate HUD bg
 COLOR_LEVINE_DISTRESS = (80, 50, 240) # Rose / Amber-red (Cardiac distress)
@@ -32,15 +30,8 @@ class Visualizer:
         pass
 
     def get_risk_color(self, risk_level: str) -> Tuple[int, int, int]:
-        if risk_level == "NORMAL":
-            return COLOR_NORMAL
-        elif risk_level == "UNUSUAL":
-            return COLOR_UNUSUAL
-        elif risk_level == "CONCERNING":
-            return COLOR_CONCERNING
-        elif risk_level == "EMERGENCY":
-            return COLOR_EMERGENCY
-        return COLOR_NEUTRAL
+        # Shared palette: green/blue/yellow/orange/deep-orange/red escalation
+        return risk_bgr(risk_level, default=COLOR_NEUTRAL)
 
     def draw_levine_beacon(
         self,
@@ -115,19 +106,19 @@ class Visualizer:
         # Subtitle brand
         cv2.putText(frame, "ARUGA | RISK ASSESSMENT", (16, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 175, 190), 1, cv2.LINE_AA)
 
-        # 2. Risk Level Badge
+        # 2. Risk Level Badge (ASCII only — cv2.putText cannot draw emoji)
         if risk_level == "EMERGENCY":
-            badge_text = f"🚨 EMERGENCY: INACTIVE {inactivity_status.get('inactive_duration', 0):.1f}s"
+            badge_text = f"{ASCII_TAG['EMERGENCY']}EMERGENCY: INACTIVE {inactivity_status.get('inactive_duration', 0):.1f}s"
         elif fall_status.get("state") == "FALLEN":
-            badge_text = f"⚠️ CONCERNING: FALL DETECTED ({int(fall_status.get('fall_confidence', 0)*100)}%)"
+            badge_text = f"{ASCII_TAG['CONCERNING']}CONCERNING: FALL DETECTED ({int(fall_status.get('fall_confidence', 0)*100)}%)"
         elif is_levine or fall_status.get("behavior") == "LEVINE_SIGN_DISTRESS" or fall_status.get("state") == "CORONARY_DISTRESS":
-            badge_text = "💔 CONCERNING: LEVINE'S SIGN (CHEST PAIN DISTRESS)"
+            badge_text = f"{ASCII_TAG['CONCERNING']}CONCERNING: LEVINE SIGN (CHEST CLUTCH)"
         elif risk_level == "CONCERNING":
-            badge_text = f"⚠️ CONCERNING: RISK DETECTED ({int(fall_status.get('fall_confidence', 0)*100)}%)"
+            badge_text = f"{ASCII_TAG['CONCERNING']}CONCERNING: RISK DETECTED ({int(fall_status.get('fall_confidence', 0)*100)}%)"
         elif risk_level == "UNUSUAL":
-            badge_text = "⚠️ UNUSUAL: UNSTABLE / SEVERE TILT"
+            badge_text = f"{ASCII_TAG['UNUSUAL']}UNUSUAL: UNSTABLE / SEVERE TILT"
         else:
-            badge_text = "🟢 NORMAL: ROUTINE MOBILITY"
+            badge_text = "NORMAL: ROUTINE MOBILITY"
 
         cv2.putText(frame, badge_text, (16, 56), cv2.FONT_HERSHEY_DUPLEX, 0.78, risk_color, 2, cv2.LINE_AA)
         
@@ -210,9 +201,9 @@ class Visualizer:
 
         # 7. Flashing Border on Critical Inactivity or Fall
         if risk_level == "EMERGENCY":
-            cv2.rectangle(frame, (0, 0), (w, h), COLOR_EMERGENCY, 8)
+            cv2.rectangle(frame, (0, 0), (w, h), self.get_risk_color(risk_level), 8)
         elif risk_level == "CONCERNING":
-            cv2.rectangle(frame, (0, 0), (w, h), COLOR_CONCERNING, 4)
+            cv2.rectangle(frame, (0, 0), (w, h), self.get_risk_color(risk_level), 4)
 
         return frame
 
@@ -270,18 +261,18 @@ class Visualizer:
             for p in persons:
                 if person_risk(p) == "EMERGENCY":
                     worst_dur = max(worst_dur, p.get("inactivity_status", {}).get("inactive_duration", 0))
-            badge_text = f"🚨 EMERGENCY: INACTIVE {worst_dur:.1f}s"
+            badge_text = f"{ASCII_TAG['EMERGENCY']}EMERGENCY: INACTIVE {worst_dur:.1f}s"
         elif worst == "CONCERNING":
             if total_falls > 0:
-                badge_text = f"⚠️ CONCERNING: FALL DETECTED (total {total_falls})"
+                badge_text = f"{ASCII_TAG['CONCERNING']}CONCERNING: FALL DETECTED (total {total_falls})"
             elif has_multi_levine:
-                badge_text = "💔 CONCERNING: CARDIAC DISTRESS / LEVINE'S SIGN"
+                badge_text = f"{ASCII_TAG['CONCERNING']}CONCERNING: CARDIAC DISTRESS / LEVINE SIGN"
             else:
-                badge_text = "⚠️ CONCERNING: UNSTABLE POSTURE DETECTED"
+                badge_text = f"{ASCII_TAG['CONCERNING']}CONCERNING: UNSTABLE POSTURE DETECTED"
         elif worst == "UNUSUAL":
-            badge_text = "⚠️ UNUSUAL: UNSTABLE / SEVERE TILT"
+            badge_text = f"{ASCII_TAG['UNUSUAL']}UNUSUAL: UNSTABLE / SEVERE TILT"
         else:
-            badge_text = "🟢 NORMAL: ROUTINE MOBILITY"
+            badge_text = "NORMAL: ROUTINE MOBILITY"
         cv2.putText(frame, badge_text, (16, 56), cv2.FONT_HERSHEY_DUPLEX, 0.72, risk_color, 2, cv2.LINE_AA)
         cv2.putText(frame, f"Incidents: {total_falls}", (w - 170, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.50, (200, 220, 240), 1, cv2.LINE_AA)
@@ -371,8 +362,8 @@ class Visualizer:
 
         # 4. Border reflects worst risk
         if worst == "EMERGENCY":
-            cv2.rectangle(frame, (0, 0), (w, h), COLOR_EMERGENCY, 8)
+            cv2.rectangle(frame, (0, 0), (w, h), risk_color, 8)
         elif worst == "CONCERNING":
-            cv2.rectangle(frame, (0, 0), (w, h), COLOR_CONCERNING, 4)
+            cv2.rectangle(frame, (0, 0), (w, h), risk_color, 4)
 
         return frame

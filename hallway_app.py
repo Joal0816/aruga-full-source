@@ -42,13 +42,13 @@ from core.frame_pump import FramePump, SourceLost
 from utils.hallway_overlay import draw_hallway_hud
 from utils.logger import EventLogger
 from utils.beep import beep as _beep, AlarmAck
+from utils.risk_palette import RISK_HEX, ICONS
 
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-RISK_HEX = {"NORMAL": "#34d399", "RESTING": "#60a5fa", "UNUSUAL": "#fbbf24",
-            "SLUMP": "#fb923c", "CONCERNING": "#ef4444", "EMERGENCY": "#c084fc"}
+# Risk colors: shared palette (utils/risk_palette) — EMERGENCY red, CONCERNING deep orange.
 RISK_TEXT = {"NORMAL": "NORMAL — ROUTINE MOBILITY", "RESTING": "RESTING IN SEATING",
              "UNUSUAL": "UNUSUAL — UNSTABLE POSTURE", "SLUMP": "SLUMP — CHECK ON PERSON",
              "CONCERNING": "CONCERNING — FALL DETECTED", "EMERGENCY": "EMERGENCY — INACTIVE"}
@@ -383,7 +383,9 @@ class HallwayApp(ctk.CTk):
         ctk.CTkLabel(tele, text="Per-person").pack(anchor="w", padx=8, pady=(4, 0))
         self.person_tree = self._tree(tele, [("ID", 36), ("Risk", 78), ("Zone", 70),
                                              ("Angle", 52), ("Still", 52)], height=5)
-        self.person_tree.pack(fill="x", padx=8, pady=(0, 8))
+        self.person_tree.pack(fill="x", padx=8, pady=(0, 2))
+        ctk.CTkLabel(tele, text="P1* = signal lost, holding last pose   ·   … = weak pose",
+                     text_color="gray", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=8, pady=(0, 8))
 
         # bottom
         bottom = ctk.CTkFrame(self.outer_pane, corner_radius=10)
@@ -394,8 +396,8 @@ class HallwayApp(ctk.CTk):
         bottom.grid_columnconfigure(1, weight=2)
         ctk.CTkLabel(bottom, text="📋 Incident History").grid(row=0, column=0, sticky="w", padx=12, pady=(6, 0))
         ctk.CTkLabel(bottom, text="📸 Recent Alert Snapshots").grid(row=0, column=1, sticky="w", padx=12, pady=(6, 0))
-        self.log_tree = self._tree(bottom, ["id", "timestamp", "person_id", "event_type", "confidence",
-                                            "spine_angle", "vertical_velocity", "aspect_ratio", "note"], height=5)
+        self.log_tree = self._tree(bottom, ["#", "Time", "Person", "Event", "Confidence",
+                                             "Angle", "Speed", "BBox AR", "Note"], height=5)
         self.log_tree.grid(row=1, column=0, padx=12, pady=6, sticky="ew")
         btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
         btn_row.grid(row=2, column=0, padx=12, pady=(0, 8), sticky="w")
@@ -1032,14 +1034,13 @@ class HallwayApp(ctk.CTk):
         risk = pkt.get("risk", "NORMAL")
         color = RISK_HEX.get(risk, "#f8fafc")
         inact = pkt.get("inact", 0.0)
-        icon = {"NORMAL": "🟢", "RESTING": "🔵", "UNUSUAL": "⚠️",
-                "SLUMP": "🟠", "CONCERNING": "⚠️", "EMERGENCY": "🚨"}.get(risk, "")
+        icon = ICONS.get(risk, "")
         self.card_risk.configure(text=f"{icon} {RISK_TEXT.get(risk, risk)}", text_color=color)
         self.card_persons.configure(text=f"{len(pkt.get('persons', []))} tracked")
         self.card_angle.configure(text=f"{pkt.get('angle', 0.0):.1f}°")
         self.card_vy.configure(text=f"{pkt.get('vy', 0.0):+.2f}")
         self.card_timer.configure(text=f"{inact:.1f}s",
-                                  text_color="#c084fc" if pkt.get("is_inact") else "#f8fafc")
+                                  text_color=RISK_HEX["EMERGENCY"] if pkt.get("is_inact") else "#f8fafc")
         lost = pkt.get("lost", [])
         lost_txt = ("  •  ⚠️ UNVERIFIED: " + ", ".join(f"P{tid} {r}" for tid, r in lost)) if lost else ""
         src_txt = f"  •  {pkt['source_label']}" if pkt.get("source_label") else ""

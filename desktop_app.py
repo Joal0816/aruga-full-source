@@ -40,17 +40,13 @@ from utils.visualizer import Visualizer
 from utils.logger import EventLogger
 from utils.synthetic_generator import generate_synthetic_fall_video
 from utils.beep import beep as _beep, AlarmAck
+from utils.risk_palette import RISK_HEX as RISK_COLORS, ICONS
 
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-RISK_COLORS = {
-    "NORMAL": "#34d399",
-    "UNUSUAL": "#fbbf24",
-    "CONCERNING": "#ef4444",
-    "EMERGENCY": "#c084fc",
-}
+# Risk colors: shared palette (utils/risk_palette) — EMERGENCY red, CONCERNING deep orange.
 RISK_ORDER = {"NORMAL": 0, "UNUSUAL": 1, "CONCERNING": 2, "EMERGENCY": 3}
 RISK_TEXT = {
     "NORMAL": "NORMAL — ROUTINE MOBILITY",
@@ -261,8 +257,8 @@ class ArugaDesktopApp(ctk.CTk):
         ctk.CTkLabel(bottom, text="📋 Incident History").grid(row=0, column=0, sticky="w", padx=12, pady=(6, 0))
         ctk.CTkLabel(bottom, text="📸 Recent Alert Snapshots").grid(row=0, column=1, sticky="w", padx=12, pady=(6, 0))
         self.log_tree = self._tree(
-            bottom, ["id", "timestamp", "person_id", "event_type", "confidence",
-                     "spine_angle", "vertical_velocity", "aspect_ratio", "note"], height=5)
+            bottom, ["#", "Time", "Person", "Event", "Confidence",
+                     "Angle", "Speed", "BBox AR", "Note"], height=5)
         self.log_tree.grid(row=1, column=0, padx=12, pady=6, sticky="ew")
         btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
         btn_row.grid(row=2, column=0, padx=12, pady=(0, 8), sticky="w")
@@ -917,13 +913,13 @@ class ArugaDesktopApp(ctk.CTk):
         color = RISK_COLORS.get(risk, "#f8fafc")
         inact = pkt.get("inact", 0.0)
         self.card_risk.configure(
-            text=f"{'🚨' if risk == 'EMERGENCY' else '⚠️' if risk != 'NORMAL' else '🟢'} "
+            text=f"{ICONS.get(risk, '')} "
                  f"{RISK_TEXT.get(risk, risk)}" + (f"  {inact:.1f}s" if risk == "EMERGENCY" else ""),
             text_color=color)
         self.card_angle.configure(text=f"{pkt.get('angle', 0.0):.1f}°")
         self.card_vy.configure(text=f"{pkt.get('vy', 0.0):+.2f}")
         self.card_timer.configure(text=f"{inact:.1f}s",
-                                  text_color="#c084fc" if pkt.get("is_inact") else "#f8fafc")
+                                  text_color=RISK_COLORS["EMERGENCY"] if pkt.get("is_inact") else "#f8fafc")
 
         n_p = len(pkt.get("persons", []))
         extra = f"  •  {n_p} person(s) [{pkt.get('backend', '')}]" if n_p or pkt.get("backend") == "builtin" else ""

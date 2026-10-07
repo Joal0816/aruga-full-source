@@ -25,6 +25,11 @@ from core.frame_pump import FramePump, SourceLost
 from utils.visualizer import Visualizer
 from utils.logger import EventLogger
 from utils.beep import AlarmAck
+from utils.risk_palette import RISK_HEX
+
+
+def _rgb(hex_color):
+    return f"{int(hex_color[1:3], 16)}, {int(hex_color[3:5], 16)}, {int(hex_color[5:7], 16)}"
 from utils.synthetic_generator import generate_synthetic_fall_video
 
 # --- PAGE CONFIGURATION ---
@@ -36,7 +41,9 @@ st.set_page_config(
 )
 
 # --- CUSTOM CSS & THEME ---
-st.markdown("""
+# Risk pill colors come from utils/risk_palette via __C__/__E__ tokens so the
+# web UI can never drift from the desktop/hallway palette.
+_CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
     
@@ -104,9 +111,9 @@ st.markdown("""
     }
     .status-normal   { background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid #34d399; }
     .status-unusual   { background: rgba(251, 191, 36, 0.18); color: #fbbf24; border: 1px solid #fbbf24; }
-    .status-concerning{ background: rgba(239, 68, 68, 0.22); color: #ef4444; border: 1px solid #ef4444; animation: pulse 1.2s infinite; }
+    .status-concerning{ background: rgba(__C_RGB__, 0.22); color: __C__; border: 1px solid __C__; animation: pulse 1.2s infinite; }
     .status-cardiac   { background: rgba(244, 63, 94, 0.22); color: #fb7185; border: 1px solid #f43f5e; animation: pulse 1.0s infinite; }
-    .status-emergency { background: rgba(192, 132, 252, 0.28); color: #c084fc; border: 1px solid #c084fc; animation: pulse 0.8s infinite; }
+    .status-emergency { background: rgba(__E_RGB__, 0.28); color: __E__; border: 1px solid __E__; animation: pulse 0.8s infinite; }
     
     @keyframes pulse {
         0% { opacity: 0.8; transform: scale(0.99); }
@@ -114,7 +121,13 @@ st.markdown("""
         100% { opacity: 0.8; transform: scale(0.99); }
     }
 </style>
-""", unsafe_allow_html=True)
+"""
+st.markdown(_CSS
+            .replace("__C__", RISK_HEX["CONCERNING"])
+            .replace("__C_RGB__", _rgb(RISK_HEX["CONCERNING"]))
+            .replace("__E__", RISK_HEX["EMERGENCY"])
+            .replace("__E_RGB__", _rgb(RISK_HEX["EMERGENCY"])),
+            unsafe_allow_html=True)
 
 # --- BROWSER AUDIO ALARM SYNTHESIZER ---
 AUDIO_ALARM_HTML = """
@@ -368,6 +381,10 @@ with col_video:
 
 with col_telemetry:
     st.subheader("📊 Live Telemetry & Metrics")
+    stream_status_ph = st.empty()
+    stream_status_ph.markdown(
+        '<span style="color:#94a3b8;">○ Idle — press Start Monitoring</span>',
+        unsafe_allow_html=True)
     metric_cols1, metric_cols2 = st.columns(2)
     with metric_cols1:
         metric_state_ph = st.empty()
@@ -433,7 +450,7 @@ def render_risk_pill(risk_level: str, inactive_dur: float = 0.0, behavior: str =
     elif behavior == "LEVINE_SIGN_DISTRESS" or risk_level == "CORONARY_DISTRESS":
         return '<span class="status-pill status-cardiac">💔 CARDIAC DISTRESS — LEVINE SIGN</span>'
     elif risk_level == "CONCERNING":
-        return '<span class="status-pill status-concerning">⚠️ CONCERNING — FALL DETECTED</span>'
+        return '<span class="status-pill status-concerning">🛑 CONCERNING — FALL DETECTED</span>'
     elif risk_level == "UNUSUAL":
         return '<span class="status-pill status-unusual">⚠️ UNUSUAL — UNSTABLE POSTURE</span>'
     return '<span class="status-pill status-normal">🟢 NORMAL — ROUTINE MOBILITY</span>'
@@ -539,11 +556,19 @@ if st.session_state.is_running and video_source is not None:
         audio_trigger_placeholder = st.empty()
         logged_falls: dict = {}
         logged_inactive: set = set()
+        _last_t, _fps = time.time(), 0.0
         st.session_state.pop("_pump_error", None)
 
         for frame in _drain_pump(pump, lambda: st.session_state.is_running):
             frame_idx += 1
             now = time.time()
+            _dt = max(1e-3, now - _last_t)
+            _last_t = now
+            _fps = 0.9 * _fps + 0.1 * (1.0 / _dt) if _fps else 1.0 / _dt
+            stream_status_ph.markdown(
+                f'<span style="color:#34d399; font-weight:700;">● LIVE</span> '
+                f'<span style="color:#94a3b8;">— {_fps:.1f} fps analysis</span>',
+                unsafe_allow_html=True)
             persons = st.session_state.multi_manager.process(frame, current_time=now)
 
             # Log per-person events: one log per incident (rising edge).
@@ -617,15 +642,15 @@ if st.session_state.is_running and video_source is not None:
             metric_timer_ph.markdown(f"""
             <div class="metric-card">
                 <div class="metric-label">Inactivity Duration (worst)</div>
-                <div class="metric-value" style="color: {'#c084fc' if is_inact else '#f8fafc'};">{inact_dur:.1f}s</div>
+                <div class="metric-value" style="color: {'#dc2626' if is_inact else '#f8fafc'};">{inact_dur:.1f}s</div>
             </div>
             """, unsafe_allow_html=True)
 
             # Display 2 clinical behavioral patterns (Fall & Inactivity vs Levine's Sign Cardiac Distress)
             if any(p.get("inactivity_status", {}).get("is_inactive_alert", False) for p in persons):
-                p1_desc = '<span style="color: #c084fc; font-weight: 700;">🚨 INACTIVITY EMERGENCY</span>'
+                p1_desc = f'<span style="color: {RISK_HEX["EMERGENCY"]}; font-weight: 700;">🚨 INACTIVITY EMERGENCY</span>'
             elif any(p.get("fall_status", {}).get("state") == "FALLEN" for p in persons):
-                p1_desc = '<span style="color: #ef4444; font-weight: 700;">⚠️ FALL DETECTED</span>'
+                p1_desc = f'<span style="color: {RISK_HEX["CONCERNING"]}; font-weight: 700;">⚠️ FALL DETECTED</span>'
             elif any(p.get("fall_status", {}).get("state") == "PRE_FALL" for p in persons):
                 p1_desc = '<span style="color: #fbbf24; font-weight: 700;">⚠️ UNSTABLE / PRE-FALL DESCENT</span>'
             else:
@@ -638,7 +663,7 @@ if st.session_state.is_running and video_source is not None:
                 for p in persons
             )
             if has_levine_distress:
-                p2_desc = '<span style="color: #fb7185; font-weight: 700;">💔 ACTIVE — Chest Clutch &amp; Antalgic Flexion (~50% MI Risk)</span>'
+                p2_desc = '<span style="color: #fb7185; font-weight: 700;">💔 ACTIVE — chest-clutch gesture detected (possible cardiac distress — check on person)</span>'
             else:
                 p2_desc = '<span style="color: #94a3b8;">🟢 Clear / No Chest Clutching</span>'
 
@@ -696,6 +721,12 @@ if st.session_state.is_running and video_source is not None:
         if _err:
             st.error(f"Source lost ({source_label}): {_err}")
             st.session_state.is_running = False
+            stream_status_ph.markdown(
+                f'<span style="color:{RISK_HEX["CONCERNING"]}; font-weight:700;">○ SOURCE LOST</span> '
+                f'<span style="color:#94a3b8;">— {_err}</span>', unsafe_allow_html=True)
+        else:
+            stream_status_ph.markdown(
+                '<span style="color:#94a3b8;">○ Stream stopped</span>', unsafe_allow_html=True)
     else:
         # ================= SINGLE-PERSON LOOP (original) =================
         pose_estimator = PoseEstimator()
@@ -710,11 +741,19 @@ if st.session_state.is_running and video_source is not None:
         audio_trigger_placeholder = st.empty()
         logged_fall_count = 0
         logged_inactive = False
+        _last_t, _fps = time.time(), 0.0
         st.session_state.pop("_pump_error", None)
 
         for frame in _drain_pump(pump, lambda: st.session_state.is_running):
             frame_idx += 1
             now = time.time()
+            _dt = max(1e-3, now - _last_t)
+            _last_t = now
+            _fps = 0.9 * _fps + 0.1 * (1.0 / _dt) if _fps else 1.0 / _dt
+            stream_status_ph.markdown(
+                f'<span style="color:#34d399; font-weight:700;">● LIVE</span> '
+                f'<span style="color:#94a3b8;">— {_fps:.1f} fps analysis</span>',
+                unsafe_allow_html=True)
 
             # 1. Pose estimation
             has_pose, raw_landmarks, keypoints = pose_estimator.process_frame(frame)
@@ -803,15 +842,15 @@ if st.session_state.is_running and video_source is not None:
             metric_timer_ph.markdown(f"""
             <div class="metric-card">
                 <div class="metric-label">Inactivity Duration</div>
-                <div class="metric-value" style="color: {'#c084fc' if is_inact else '#f8fafc'};">{inact_dur:.1f}s</div>
+                <div class="metric-value" style="color: {'#dc2626' if is_inact else '#f8fafc'};">{inact_dur:.1f}s</div>
             </div>
             """, unsafe_allow_html=True)
 
             # Display 2 clinical behavioral patterns (Fall & Inactivity vs Levine's Sign Cardiac Distress)
             if is_inact:
-                p1_desc = f'<span style="color: #c084fc; font-weight: 700;">🚨 INACTIVITY EMERGENCY ({inact_dur:.1f}s)</span>'
+                p1_desc = f'<span style="color: {RISK_HEX["EMERGENCY"]}; font-weight: 700;">🚨 INACTIVITY EMERGENCY ({inact_dur:.1f}s)</span>'
             elif fall_status.get("state") == "FALLEN":
-                p1_desc = f'<span style="color: #ef4444; font-weight: 700;">⚠️ FALL DETECTED ({int(fall_status.get("fall_confidence", 0.8)*100)}%)</span>'
+                p1_desc = f'<span style="color: {RISK_HEX["CONCERNING"]}; font-weight: 700;">⚠️ FALL DETECTED ({int(fall_status.get("fall_confidence", 0.8)*100)}%)</span>'
             elif fall_status.get("state") == "PRE_FALL":
                 p1_desc = '<span style="color: #fbbf24; font-weight: 700;">⚠️ UNSTABLE / PRE-FALL DESCENT</span>'
             else:
@@ -823,7 +862,7 @@ if st.session_state.is_running and video_source is not None:
                 (features and features.get("is_levine_gesture", False))
             )
             if is_levine_active:
-                p2_desc = '<span style="color: #fb7185; font-weight: 700;">💔 ACTIVE — Chest Clutch &amp; Antalgic Flexion (~50% MI Risk)</span>'
+                p2_desc = '<span style="color: #fb7185; font-weight: 700;">💔 ACTIVE — chest-clutch gesture detected (possible cardiac distress — check on person)</span>'
             else:
                 p2_desc = '<span style="color: #94a3b8;">🟢 Clear / No Chest Clutching</span>'
 
@@ -867,6 +906,12 @@ if st.session_state.is_running and video_source is not None:
         if _err:
             st.error(f"Source lost ({source_label}): {_err}")
             st.session_state.is_running = False
+            stream_status_ph.markdown(
+                f'<span style="color:{RISK_HEX["CONCERNING"]}; font-weight:700;">○ SOURCE LOST</span> '
+                f'<span style="color:#94a3b8;">— {_err}</span>', unsafe_allow_html=True)
+        else:
+            stream_status_ph.markdown(
+                '<span style="color:#94a3b8;">○ Stream stopped</span>', unsafe_allow_html=True)
 
 # Cleanup temp video file if uploaded
 if temp_file_path and os.path.exists(temp_file_path):
@@ -880,11 +925,14 @@ st.markdown("---")
 st.subheader("📋 Incident History & Snapshot Log")
 
 log_df = st.session_state.event_logger.get_dataframe()
+_LOG_COLS = {"id": "#", "timestamp": "Time", "person_id": "Person", "event_type": "Event",
+             "confidence": "Confidence", "spine_angle": "Angle°", "vertical_velocity": "Speed",
+             "aspect_ratio": "BBox AR", "note": "Note"}
 
 col_table, col_actions = st.columns([4, 1])
 with col_table:
     if not log_df.empty:
-        st.dataframe(log_df, use_container_width=True)
+        st.dataframe(log_df.rename(columns=_LOG_COLS), use_container_width=True)
     else:
         st.write("No fall or inactivity incidents recorded yet.")
 
