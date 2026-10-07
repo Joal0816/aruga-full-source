@@ -270,6 +270,14 @@ else:
     max_persons = 1
     detect_interval = 5
 
+# --- Verification guide reader (VERIFICATION.md ships with the repo) ---
+with st.sidebar.expander("📖 Verification Guide", expanded=False):
+    try:
+        with open("VERIFICATION.md", encoding="utf-8") as _vf:
+            st.markdown(_vf.read().replace("- [ ]", "☐"))
+    except OSError:
+        st.info("VERIFICATION.md not found — clone the full repo to view it.")
+
 camera_idx = 0
 rtsp_url = st.session_state.get("rtsp_url", "")
 if source_type == "📹 USB Camera":
