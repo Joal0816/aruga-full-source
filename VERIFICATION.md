@@ -19,6 +19,62 @@ Prints a PASS/FAIL checklist for every automatable item, saves a snapshot to
 `/tmp/aruga_live_verify_snapshot.jpg`, and ends with the explicit
 **[HUMAN]** items (physical drill, audible beep, zone approval).
 
+## Website path — live CCTV + uploads (device already connected)
+
+If the camera is **already paired** in the Tapo app, the web-facing path is
+the **stream bridge** — note `aruga.joalvergs.tech` itself is a static
+landing page (Cloudflare Pages hosts files, not video analysis); the live
+feed comes from the bridge, optionally tunneled via `run_tunnel.sh`.
+
+### Start it
+
+```bash
+cd ~/aruga-full-source
+# Tapo C230 with Camera Account creds (stream2 = fast/360p, recommended):
+.venv/bin/python stream_bridge.py --tapo-ip <CAM_IP> --tapo-user <USER> --tapo-pass <PASS>
+# or any RTSP / USB / file:
+.venv/bin/python stream_bridge.py --source rtsp://user:pass@IP:554/stream2
+# or camera-free test:
+.venv/bin/python stream_bridge.py --source assets/synthetic_fall_demo.mp4
+```
+
+Open `http://<host>:8080/` → built-in page: **live feed + telemetry (left),
+media upload analysis (right)**.
+
+### Why does the website show a stickman?
+
+- **Demo/test source** (`synthetic_fall_demo.mp4`): the *scene itself* is an
+  animated stick figure — expected; it proves the whole pipeline without a
+  camera.
+- **Real camera source**: you will see the actual video with the pose
+  skeleton drawn on top (the stickman is the overlay, not a replacement).
+- A real camera showing *only* a stick figure on an empty background means
+  the wrong source is selected — check the `source=` field in `/telemetry`.
+
+### Upload analysis (`POST /analyze_file`, raw body, ≤ 64 MB)
+
+Image (jpg/png) or video (mp4/avi/mov). Videos are scored on up to ~30 s of
+frames **in video time** (timers match clip content, not CPU speed) plus a
+6 s virtual tail so inactivity can fire when a clip ends mid-incident.
+CPU-only boxes take ~1–4 minutes for a typical clip.
+
+| Field | Meaning |
+|---|---|
+| `success` | pipeline accepted the file |
+| `analysis.falls_detected` | fall incidents (rising-edge, same as app logs) |
+| `analysis.events` | total logged incidents (falls + inactivity) |
+| `analysis.overall_risk_index` | worst risk reached (… CONCERNING / EMERGENCY) |
+| `analysis.duration_seconds` / `truncated` | video time scored / hit the 720-frame cap |
+
+### Acceptance checklist (bridge path)
+
+- [ ] `http://<host>:8080/` loads; `/status` returns `online: true`
+- [ ] live frames update; `fps > 0` in `/telemetry`; risk stays `NORMAL` on a quiet scene
+- [ ] real camera source shows **video picture + skeleton overlay**
+- [ ] uploading `assets/synthetic_fall_demo.mp4` returns `success: true`,
+      `falls_detected ≥ 1`, `overall_risk_index: EMERGENCY`
+- [ ] a > 64 MB upload returns HTTP 413
+
 ## Environments
 
 ```bash

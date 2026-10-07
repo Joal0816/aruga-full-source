@@ -267,15 +267,24 @@ def analyze_uploaded_file(file_bytes):
         frames_evaluated = 0
         fall_frames = 0
         inactivity_frames = 0
+        falls_detected = 0
+        events = 0
         worst = "NONE"
         max_tracks = 0
+        truncated = False
+        logged_falls, logged_inactive = {}, set()
+        last_frame = None
+        CAP = 720          # ~30s @24fps — keeps request time bounded on CPU-only boxes
+        TAIL_SECONDS = 6.0 # virtual tail so inactivity can fire when a clip ends mid-incident
         try:
             with _upload_mgr_lock:
                 mgr = _get_upload_manager()
                 mgr.reset()
                 pump = FramePump(path, kind="file", loop_files=False)
                 try:
-                    while frames_evaluated < 120:
+                    fps = pump.cap.get(cv2.CAP_PROP_FPS) or 25.0
+                    vt = 0.0
+                    while frames_evaluated < CAP:
                         try:
                             frame = pump.read()
                         except SourceLost:
@@ -283,18 +292,53 @@ def analyze_uploaded_file(file_bytes):
                         if frame is None:
                             continue
                         frames_evaluated += 1
-                        persons = mgr.process(frame, current_time=time.time())
+                        last_frame = frame
+                        vt = frames_evaluated / fps
+                        # VIDEO time (n/fps), not wall clock: inactivity/FSM timers
+                        # must match the clip's content, not this CPU's speed.
+                        persons = mgr.process(frame, current_time=vt)
                         max_tracks = max(max_tracks, len(persons))
-                        if persons:
-                            r = worst_risk(persons)
+                        for p in persons:
+                            tid = p.get("track_id", 0)
+                            r = p.get("hallway", {}).get("risk_level", "NORMAL")
                             if r != "NONE" and (worst == "NONE" or _risk_rank(r) > _risk_rank(worst)):
                                 worst = r
-                            if any(p.get("fall_status", {}).get("state") in ("FALLEN", "INACTIVE_ALERT")
-                                   for p in persons):
+                            if p.get("fall_status", {}).get("state") in ("FALLEN", "INACTIVE_ALERT"):
                                 fall_frames += 1
-                            if any(p.get("inactivity_status", {}).get("is_inactive_alert")
-                                   for p in persons):
+                            if p.get("inactivity_status", {}).get("is_inactive_alert"):
                                 inactivity_frames += 1
+                            # rising-edge incident counts (like the apps log them)
+                            if (p.get("fall_status", {}).get("state") == "FALLEN"
+                                    and p.get("fall_status", {}).get("total_falls", 0) > logged_falls.get(tid, 0)):
+                                logged_falls[tid] = p["fall_status"]["total_falls"]
+                                falls_detected += 1
+                                events += 1
+                            if (p.get("inactivity_status", {}).get("is_inactive_alert")
+                                    and tid not in logged_inactive):
+                                logged_inactive.add(tid)
+                                events += 1
+                            elif not p.get("inactivity_status", {}).get("is_inactive_alert"):
+                                logged_inactive.discard(tid)
+                    truncated = frames_evaluated >= CAP
+                    # Virtual tail: hold last frame forward in VIDEO time so the
+                    # inactivity path is exercised even when the clip ends right
+                    # after the collapse (same trick as tools/eval_clips.py).
+                    if last_frame is not None:
+                        step = TAIL_SECONDS / 60.0
+                        for _ in range(60):
+                            vt += step
+                            persons = mgr.process(last_frame, current_time=vt)
+                            for p in persons:
+                                tid = p.get("track_id", 0)
+                                if p.get("inactivity_status", {}).get("is_inactive_alert") \
+                                        and tid not in logged_inactive:
+                                    logged_inactive.add(tid)
+                                    events += 1
+                                if p.get("fall_status", {}).get("state") == "FALLEN" \
+                                        and p.get("fall_status", {}).get("total_falls", 0) > logged_falls.get(tid, 0):
+                                    logged_falls[tid] = p["fall_status"]["total_falls"]
+                                    falls_detected += 1
+                                    events += 1
                 finally:
                     pump.release()
         except SourceLost as e:
@@ -309,8 +353,12 @@ def analyze_uploaded_file(file_bytes):
             "size_bytes": len(file_bytes),
             "analysis": {
                 "frames_evaluated": frames_evaluated,
+                "duration_seconds": round(frames_evaluated / max(1e-6, fps), 1),
+                "truncated": truncated,
                 "fall_frames": fall_frames,
                 "inactivity_frames": inactivity_frames,
+                "falls_detected": falls_detected,
+                "events": events,
                 "max_tracked_persons": max_tracks,
                 "overall_risk_index": worst,
             },
@@ -427,6 +475,74 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+# Built-in verification page: live stickman MJPEG + telemetry + upload analysis.
+# Everything runs against the existing endpoints (no extra server-side state).
+BRIDGE_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARUGA Bridge — Live Feed & Analysis</title>
+<style>
+ body{background:#111827;color:#e5e7eb;font-family:system-ui,sans-serif;margin:0;padding:16px}
+ h1{font-size:1.2rem;margin:0 0 4px} .sub{color:#9ca3af;font-size:.85rem;margin-bottom:12px}
+ .wrap{display:flex;gap:16px;flex-wrap:wrap}
+ .col{flex:1 1 420px}
+ img#feed{width:100%;background:#000;border:1px solid #374151;border-radius:8px;min-height:240px}
+ pre{background:#1f2937;border:1px solid #374151;border-radius:8px;padding:10px;font-size:.78rem;
+     white-space:pre-wrap;word-break:break-word;min-height:120px}
+ .risk{font-weight:700;font-size:1.05rem;margin-top:8px}
+ #result{min-height:160px}
+ input[type=file]{margin:8px 0;color:#e5e7eb}
+ button{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer;font-weight:600}
+ .hint{color:#9ca3af;font-size:.8rem}
+</style></head><body>
+<h1>ARUGA Bridge</h1>
+<div class="sub">Live CCTV (stickman pose overlay) + media upload analysis</div>
+<div class="wrap">
+ <div class="col">
+  <img id="feed" src="/video_feed" alt="live feed">
+  <div class="risk" id="risk">—</div>
+  <pre id="tele">connecting…</pre>
+ </div>
+ <div class="col">
+  <b>Media upload analysis</b>
+  <div class="hint">Image (jpg/png) or video (mp4/avi/mov), max 64 MB.
+  Long videos are scored on up to ~30 s + a 6 s virtual tail for inactivity.</div>
+  <input type="file" id="file" accept="image/*,video/*">
+  <button onclick="go()">Analyze</button>
+  <div class="hint" id="status"></div>
+  <pre id="result"></pre>
+ </div>
+</div>
+<script>
+ const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+ async function poll(){
+  try{
+   const t = await (await fetch('/telemetry')).json();
+   document.getElementById('tele').textContent = JSON.stringify(t, null, 1);
+   document.getElementById('risk').textContent =
+     (t.risk && t.risk !== 'NONE' ? t.risk + ' — ' + (t.status||'') : (t.status||'waiting'));
+   document.getElementById('risk').style.color =
+     ['EMERGENCY','CONCERNING'].includes(t.risk) ? '#dc2626' :
+     ['SLUMP','UNUSUAL'].includes(t.risk) ? '#ea580c' : '#34d399';
+  }catch(e){ document.getElementById('tele').textContent = 'bridge unreachable'; }
+ }
+ setInterval(poll, 1000); poll();
+ async function go(){
+  const f = document.getElementById('file').files[0];
+  if(!f){ document.getElementById('status').textContent = 'choose a file first'; return; }
+  document.getElementById('status').textContent = 'analyzing… (CPU: can take a minute)';
+  document.getElementById('result').textContent = '';
+  try{
+   const r = await fetch('/analyze_file', {method:'POST', headers:{'Content-Type':'application/octet-stream'}, body: f});
+   const j = await r.json();
+   document.getElementById('result').textContent = JSON.stringify(j, null, 1);
+   document.getElementById('status').textContent = j.success ? 'done' : 'failed';
+  }catch(e){ document.getElementById('status').textContent = 'error: ' + e; }
+ }
+</script>
+</body></html>"""
+
+
 class BridgeRequestHandler(BaseHTTPRequestHandler):
     def end_headers_with_cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -441,7 +557,14 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
 
-        if parsed.path == "/voice":
+        if parsed.path in ("/", "/index.html"):
+            # Built-in verification page: live stickman feed + upload analysis UI
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers_with_cors()
+            self.wfile.write(BRIDGE_PAGE.encode("utf-8"))
+
+        elif parsed.path == "/voice":
             # Two-way voice relay (RFC 6455 WebSocket on the same port).
             # Runs the WS read loop in this handler thread — thread-per-client,
             # so long-lived connections never block the other endpoints.
@@ -520,6 +643,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 self.send_response(400)
                 self.end_headers_with_cors()
                 self.wfile.write(b"No data provided")
+                return
+            if content_length > 64 * 1024 * 1024:
+                self.send_response(413)
+                self.end_headers_with_cors()
+                self.wfile.write(b"Upload too large (64 MB max)")
                 return
 
             file_data = self.rfile.read(content_length)
