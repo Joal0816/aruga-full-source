@@ -57,6 +57,7 @@ def beep():
             return
         wav = _beep_wav()
         for player, args in (("paplay", ()), ("pw-play", ()), ("aplay", ("-q",)),
+                             ("afplay", ()),  # macOS built-in
                              ("ffplay", ("-nodisp", "-autoexit", "-loglevel", "quiet"))):
             if shutil.which(player):
                 try:
