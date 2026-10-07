@@ -58,7 +58,7 @@ RISK_TEXT = {
 PRESETS = {
     "Standard (Balanced)": (58.0, 0.32, 6.0),
     "High Sensitivity (Elderly Care)": (50.0, 0.22, 4.0),
-    "Low Sensitivity (Active Gym/Sports)": (68.0, 0.45, 10.0),
+    "Low Sensitivity (Active / Visitors)": (68.0, 0.45, 10.0),
 }
 
 

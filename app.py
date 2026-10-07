@@ -150,7 +150,7 @@ st.sidebar.header("⚙️ System Configuration")
 # Sensitivity Presets
 sensitivity_mode = st.sidebar.selectbox(
     "Sensitivity Preset",
-    ["Standard (Balanced)", "High Sensitivity (Elderly Care)", "Low Sensitivity (Active Gym/Sports)"],
+    ["Standard (Balanced)", "High Sensitivity (Elderly Care)", "Low Sensitivity (Active / Visitors)"],
     index=0
 )
 
@@ -158,7 +158,7 @@ if sensitivity_mode == "High Sensitivity (Elderly Care)":
     default_angle = 50.0
     default_vel = 0.22
     default_timeout = 4.0
-elif sensitivity_mode == "Low Sensitivity (Active Gym/Sports)":
+elif sensitivity_mode == "Low Sensitivity (Active / Visitors)":
     default_angle = 68.0
     default_vel = 0.45
     default_timeout = 10.0
@@ -319,6 +319,9 @@ if "event_logger" not in st.session_state:
     st.session_state.event_logger = EventLogger()
 if "ack" not in st.session_state:
     st.session_state.ack = AlarmAck()
+if "loop" not in st.session_state:
+    # Persists pose estimator + rising-edge log dedup across Streamlit reruns
+    st.session_state.loop = {}
 if "fall_detector" not in st.session_state:
     st.session_state.fall_detector = FallDetector(
         angle_threshold=angle_thresh,
@@ -366,12 +369,18 @@ with col_video:
         if st.button("▶️ Start Monitoring", use_container_width=True, type="primary"):
             st.session_state.is_running = True
     with run_button_col2:
-        if st.button("⏹️ Stop / Reset", use_container_width=True):
+        if st.button("⏹️ Stop / Reset", use_container_width=True,
+                     help="Full stop: releases the camera and clears detection state. "
+                          "Press Start Monitoring to resume (reopens the source)."):
             st.session_state.is_running = False
             st.session_state.fall_detector.reset()
             st.session_state.inactivity_monitor.reset()
             st.session_state.feature_extractor.reset()
             st.session_state.multi_manager.reset()
+            for _k in ("sp_logged_falls", "sp_logged_inactive",
+                       "mp_logged_falls", "mp_logged_inactive"):
+                st.session_state.loop.pop(_k, None)
+            st.session_state.telemetry_history = {"Spine Angle (°)": [], "Downward Speed (Vy)": []}
             st.rerun()
     with run_button_col3:
         if st.button("🔕 Acknowledge (10 min)", use_container_width=True,
@@ -494,11 +503,13 @@ metric_timer_ph.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Telemetry data buffer for live chart
-telemetry_history = {
-    "Spine Angle (°)": [],
-    "Downward Speed (Vy)": []
-}
+# Telemetry data buffer for live chart (persists across reruns)
+if "telemetry_history" not in st.session_state:
+    st.session_state.telemetry_history = {
+        "Spine Angle (°)": [],
+        "Downward Speed (Vy)": []
+    }
+telemetry_history = st.session_state.telemetry_history
 multi_table_ph = st.empty()
 
 _RISK_ORDER = {"NORMAL": 0, "UNUSUAL": 1, "CONCERNING": 2, "EMERGENCY": 3}
@@ -549,13 +560,14 @@ if st.session_state.is_running and video_source is not None:
         pass
     elif multi_mode:
         # ================= MULTI-PERSON LOOP (2-3) =================
+        # NO reset() on entry — tracker/FSM state persists across reruns
+        # (a widget change mid-incident used to wipe all per-person state).
         visualizer = Visualizer()
-        st.session_state.multi_manager.reset()
 
         frame_idx = 0
         audio_trigger_placeholder = st.empty()
-        logged_falls: dict = {}
-        logged_inactive: set = set()
+        st.session_state.loop.setdefault("mp_logged_falls", {})
+        st.session_state.loop.setdefault("mp_logged_inactive", set())
         _last_t, _fps = time.time(), 0.0
         st.session_state.pop("_pump_error", None)
 
@@ -575,6 +587,8 @@ if st.session_state.is_running and video_source is not None:
             # A FALL log fires when a new fall is counted; an INACTIVITY log
             # fires when stillness first trips (independent ifs: the old
             # if/elif chain starved INACTIVITY while still FALLEN).
+            logged_falls = st.session_state.loop["mp_logged_falls"]
+            logged_inactive = st.session_state.loop["mp_logged_inactive"]
             for p in persons:
                 tid = p["track_id"]
                 fs, ins, feats = p["fall_status"], p["inactivity_status"], p["features"]
@@ -592,9 +606,10 @@ if st.session_state.is_running and video_source is not None:
                         person_id=tid)
                 elif not ins.get("is_inactive_alert") and tid in logged_inactive:
                     logged_inactive.discard(tid)
-            logged_falls = {tid: c for tid, c in logged_falls.items()
-                            if tid in {p["track_id"] for p in persons}}
-            logged_inactive &= {p["track_id"] for p in persons}
+            _live = {p["track_id"] for p in persons}
+            for _tid in [t for t in list(logged_falls) if t not in _live]:
+                del logged_falls[_tid]
+            logged_inactive &= _live
 
             display_frame = visualizer.draw_hud_multi(
                 frame, persons, show_skeleton=show_skeleton, show_bbox=show_telemetry_box)
@@ -729,18 +744,18 @@ if st.session_state.is_running and video_source is not None:
                 '<span style="color:#94a3b8;">○ Stream stopped</span>', unsafe_allow_html=True)
     else:
         # ================= SINGLE-PERSON LOOP (original) =================
-        pose_estimator = PoseEstimator()
+        # Detectors/pose/log-edge state persist in session_state across
+        # Streamlit reruns: widget changes mid-incident used to re-enter this
+        # loop and reset() the FSM, losing fall timestamps / inactivity timers.
+        if st.session_state.loop.get("pose") is None:
+            st.session_state.loop["pose"] = PoseEstimator()
+        pose_estimator = st.session_state.loop["pose"]
         visualizer = Visualizer()
-
-        # Reset detectors
-        st.session_state.fall_detector.reset()
-        st.session_state.inactivity_monitor.reset()
-        st.session_state.feature_extractor.reset()
 
         frame_idx = 0
         audio_trigger_placeholder = st.empty()
-        logged_fall_count = 0
-        logged_inactive = False
+        st.session_state.loop.setdefault("sp_logged_falls", 0)
+        st.session_state.loop.setdefault("sp_logged_inactive", False)
         _last_t, _fps = time.time(), 0.0
         st.session_state.pop("_pump_error", None)
 
@@ -787,19 +802,19 @@ if st.session_state.is_running and video_source is not None:
 
                 # Log events: one log per incident (rising edge)
                 if fall_status.get("state") == "FALLEN" \
-                        and fall_status.get("total_falls", 0) > logged_fall_count:
-                    logged_fall_count = fall_status["total_falls"]
+                        and fall_status.get("total_falls", 0) > st.session_state.loop["sp_logged_falls"]:
+                    st.session_state.loop["sp_logged_falls"] = fall_status["total_falls"]
                     st.session_state.event_logger.log_event(
                         "FALL_DETECTED", features, fall_status.get("fall_confidence", 0.8), frame
                     )
-                if inactivity_status.get("is_inactive_alert") and not logged_inactive:
-                    logged_inactive = True
+                if inactivity_status.get("is_inactive_alert") and not st.session_state.loop["sp_logged_inactive"]:
+                    st.session_state.loop["sp_logged_inactive"] = True
                     st.session_state.event_logger.log_event(
                         "INACTIVITY_EMERGENCY", features, 1.0, frame,
                         extra_note=f"Stationary for {inactivity_status.get('inactive_duration'):.1f}s"
                     )
                 elif not inactivity_status.get("is_inactive_alert"):
-                    logged_inactive = False
+                    st.session_state.loop["sp_logged_inactive"] = False
 
             # 5. Visualizer HUD
             display_frame = visualizer.draw_hud(
@@ -901,7 +916,6 @@ if st.session_state.is_running and video_source is not None:
             # No sleep — let Streamlit refresh as fast as possible for lower latency
 
         pump.release()
-        pose_estimator.close()
         _err = _take_pump_error()
         if _err:
             st.error(f"Source lost ({source_label}): {_err}")

@@ -69,6 +69,7 @@ class ZoneEditor(ctk.CTkToplevel):
         self.title(f"Calibrate Zones [{profile_name}] — click points, then Add Zone")
         self.geometry("1000x700")
         self._zones = zones
+        self._initial_count = len(zones.zones)
         self._save_path = save_path
         self._on_apply = on_apply
         self._pts: list = []
@@ -92,6 +93,15 @@ class ZoneEditor(ctk.CTkToplevel):
         ctk.CTkButton(top, text="Capture New BG", width=130, command=self._recapture).pack(side="left", padx=4)
         self._master_ref = master
 
+        ctk.CTkLabel(
+            self,
+            text="How to: 1) choose a zone type — bench = seating (resting OK, alarms still "
+                 "apply if someone collapses), floor = monitored walking area (falls alarm), "
+                 "ignore = never alarm (doors/counters).  2) click 3+ points around the area "
+                 "on the image.  3) Add Zone, then Save + Apply.  Yellow dots = pending shape.",
+            wraplength=950, justify="left", text_color="gray",
+            font=ctk.CTkFont(size=12)).pack(fill="x", padx=12, pady=(0, 4))
+
         self.canvas = tk.Canvas(self, width=dw, height=dh, bg="black", highlightthickness=0)
         self.canvas.pack(padx=10, pady=4)
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo, tags="bg")
@@ -102,9 +112,20 @@ class ZoneEditor(ctk.CTkToplevel):
         self.zone_list = tk.Listbox(bot, height=5)
         self.zone_list.pack(side="left", fill="x", expand=True, padx=(0, 8))
         ctk.CTkButton(bot, text="Delete Selected", width=130, command=self._delete).pack(side="left", padx=4)
+        ctk.CTkButton(bot, text="Cancel", width=90,
+                      command=self._on_close).pack(side="left", padx=4)
         ctk.CTkButton(bot, text="Save + Apply", width=130, command=self._save).pack(side="left", padx=4)
         self._refresh_list()
         self._redraw()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        dirty = self._pts or len(self._zones.zones) != self._initial_count
+        if dirty and not messagebox.askyesno(
+                "Discard changes?",
+                "Unsaved points/zone edits will be lost. Close anyway?"):
+            return
+        self.destroy()
 
     def _click(self, ev):
         self._pts.append((ev.x / self._dw, ev.y / self._dh))

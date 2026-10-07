@@ -101,6 +101,20 @@ fall detection and inactivity system/
 
 ---
 
+## 📱 Which app to use
+
+- **`hallway_app.py`** — flagship: multi-person (up to 10), zone calibration
+  (bench / floor / ignore), lost-person verify banner. Clinic hallways & waiting areas.
+- **`desktop_app.py`** — local single / 2–3-person monitor; same UX as the
+  dashboard, best frame rate (no browser roundtrip).
+- **`app.py`** — browser dashboard for review & demo: live view, telemetry,
+  incident log with CSV export.
+
+All three share the same camera drivers, detectors, alarm sound, sensitivity
+presets, and the 10-minute **Acknowledge** button.
+
+---
+
 ## ⚙️ Configuration & Sensitivity Tuning
 
 You can adjust these parameters live in the dashboard sidebar:
