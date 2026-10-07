@@ -4,6 +4,21 @@ Everything below is verified on this box (Linux, Python 3.12/3.14, i5-3230M,
 no GPU, HD WebCam on `/dev/video0`). All 7 test suites pass; the 70-clip UR
 benchmark results are in `eval_report.csv`.
 
+## Automated verification (run this first)
+
+```bash
+# Self-test: full pipeline on the synthetic fall clip — no camera needed
+.venv/bin/python tools/live_verify.py --file assets/synthetic_fall_demo.mp4
+
+# Find the Tapo on the LAN, then run live (Camera Account creds, not cloud login)
+.venv/bin/python tools/live_verify.py --discover
+.venv/bin/python tools/live_verify.py --url rtsp://USER:PASS@192.168.1.x:554/stream1 --seconds 30
+```
+
+Prints a PASS/FAIL checklist for every automatable item, saves a snapshot to
+`/tmp/aruga_live_verify_snapshot.jpg`, and ends with the explicit
+**[HUMAN]** items (physical drill, audible beep, zone approval).
+
 ## Environments
 
 ```bash
